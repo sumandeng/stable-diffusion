@@ -2,6 +2,7 @@
 # Copyright (c) 2022 Lincoln D. Stein (https://github.com/lstein)
 
 import argparse
+import base64
 import os
 import re
 import shlex
@@ -29,7 +30,8 @@ def main():
         print('--laion400m flag has been deprecated. Please use --model laion400m instead.')
         sys.exit(-1)
     if opt.weights != 'model':
-        print('--weights argument has been deprecated. Please configure ./configs/models.yaml, and call it using --model instead.')
+        print(
+            '--weights argument has been deprecated. Please configure ./configs/models.yaml, and call it using --model instead.')
         sys.exit(-1)
 
     try:
@@ -43,7 +45,7 @@ def main():
         sys.exit(-1)
 
     print('* Initializing, be patient...\n')
-    sys.path.append('.')
+    sys.path.append('..')
     from pytorch_lightning import logging
     from ldm.generate import Generate
 
@@ -105,10 +107,13 @@ def main():
         )
 
     cmd_parser = create_cmd_parser()
-    if opt.web:
-        dream_server_loop(t2i, opt.host, opt.port, opt.outdir)
-    else:
-        main_loop(t2i, opt.outdir, opt.prompt_as_dir, cmd_parser, infile)
+    # if opt.web:
+    #     dream_server_loop(t2i, opt.host, opt.port, opt.outdir)
+    # elif opt.mq:
+    #     dream_mq_loop(t2i, opt.outdir)
+    # else:
+    #     main_loop(t2i, opt.outdir, opt.prompt_as_dir, cmd_parser, infile)
+    dream_mq_loop(t2i, "./outputs")
 
 
 def main_loop(t2i, outdir, prompt_as_dir, parser, infile):
@@ -157,8 +162,8 @@ def main_loop(t2i, outdir, prompt_as_dir, parser, infile):
             break
 
         if elements[0].startswith(
-            '!dream'
-        ):   # in case a stored prompt still contains the !dream command
+                '!dream'
+        ):  # in case a stored prompt still contains the !dream command
             elements.pop(0)
 
         # rearrange the arguments to mimic how it works in the Dream bot.
@@ -194,7 +199,7 @@ def main_loop(t2i, outdir, prompt_as_dir, parser, infile):
                 opt.init_img = None
                 continue
 
-        if opt.seed is not None and opt.seed < 0:   # retrieve previous value!
+        if opt.seed is not None and opt.seed < 0:  # retrieve previous value!
             try:
                 opt.seed = last_results[opt.seed][1]
                 print(f'>> Reusing previous seed {opt.seed}')
@@ -260,6 +265,7 @@ def main_loop(t2i, outdir, prompt_as_dir, parser, infile):
             grid_images = dict()  # seed -> Image, only used if `do_grid`
 
             def image_writer(image, seed, upscaled=False):
+                print("图片生成回调")
                 path = None
                 if do_grid:
                     grid_images[seed] = image
@@ -294,11 +300,12 @@ def main_loop(t2i, outdir, prompt_as_dir, parser, infile):
                         # only append to results if we didn't overwrite an earlier output
                         results.append([path, metadata_prompt])
                 last_results.append([path, seed])
+                # print(base64.encodebytes(image))
 
             t2i.prompt2image(image_callback=image_writer, **vars(opt))
 
             if do_grid and len(grid_images) > 0:
-                grid_img   = make_grid(list(grid_images.values()))
+                grid_img = make_grid(list(grid_images.values()))
                 grid_seeds = list(grid_images.keys())
                 first_seed = last_results[0][1]
                 filename = f'{prefix}.{first_seed}.png'
@@ -344,7 +351,7 @@ def dream_server_loop(t2i, host, port, outdir):
     print('\n* --web was specified, starting web server...')
     # Change working directory to the stable-diffusion directory
     os.chdir(
-        os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
     )
 
     # Start server
@@ -368,14 +375,16 @@ def dream_server_loop(t2i, host, port, outdir):
 
 
 # Message Queue Loop
-def dream_mq_loop():
+def dream_mq_loop(t2i, outdir):
     print("\n* --mq was specified, starting message queue listening..")
     os.chdir(
-        os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+        os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
     )
+    DreamWorker.model = t2i
+    DreamServer.outdir = outdir
     dream_worker = DreamWorker()
     try:
-        dream_worker.run()
+        dream_worker.start()
     except KeyboardInterrupt:
         pass
 
@@ -386,8 +395,7 @@ def write_log_message(results, log_path):
     log_lines = [f'{path}: {prompt}\n' for path, prompt in results]
     for l in log_lines:
         output_cntr += 1
-        print(f'[{output_cntr}] {l}',end='')
-
+        print(f'[{output_cntr}] {l}', end='')
 
     with open(log_path, 'a', encoding='utf-8') as file:
         file.writelines(log_lines)
@@ -508,6 +516,12 @@ def create_argv_parser():
         type=str,
         default='./src/gfpgan',
         help='Indicates the directory containing the GFPGAN code.',
+    )
+    parser.add_argument(
+        '--mq',
+        dest='mq',
+        action='store_true',
+        help='Start in mq worker mode.',
     )
     parser.add_argument(
         '--web',
@@ -690,6 +704,12 @@ def create_cmd_parser():
         default=None,
         type=str,
         help='list of variations to apply, in the format `seed:weight,seed:weight,...'
+    )
+    parser.add_argument(
+        '--mq',
+        dest='mq',
+        action='store_true',
+        help='Start in mq worker mode.',
     )
     return parser
 
